@@ -12,6 +12,7 @@ from src.detection.manga_detector import TextDetector_YOLO
 from src.segmentation.text_segmentor import TextSegmentor_B1
 from src.inpainting.lama_cleaner import LamaCleaner
 from src.detection.detector import BaseDetector
+from src.ocr.gemini_ocr import GeminiOCR
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,16 +24,20 @@ class MangaTranslatorPipeline:
         model_dir: str = "checkpoints",
         use_segmentation: bool = True,
         use_inpainting: bool = True,
+        use_ocr: bool = True,
         device: str = "cuda"
     ):
         self.model_dir = model_dir
         self.use_segmentation = use_segmentation
         self.use_inpainting = use_segmentation and use_inpainting
+        self.use_ocr = use_ocr
+
         self.device = device
 
         self.text_detector = None
         self.text_segmenter = None
         self.inpainter = None
+        self.ocr_engine = None
         self._font_cache = {}
 
         self._initialize_models()
@@ -51,6 +56,13 @@ class MangaTranslatorPipeline:
         if self.use_inpainting:
             inp_path = os.path.join(self.model_dir, "anime-manga-big-lama.pt")
             self.inpainter = LamaCleaner(inp_path)
+
+        # Gemini OCR doesn't need a local checkpoint, but we initialize the client
+        try:
+            if self.use_ocr:
+                self.ocr_engine = GeminiOCR()
+        except Exception as e:
+            logger.warning(f"Failed to initialize GeminiOCR: {e}")
 
     def get_font(self, size: int) -> ImageFont:
         """Caches and returns a font of the specified size."""
@@ -255,7 +267,7 @@ class MangaTranslatorPipeline:
                     roi_mask_3ch = cv2.cvtColor(roi_mask_dilated, cv2.COLOR_GRAY2BGR)
                     try:
                         inpainted_roi = self.inpainter.inpaint_with_crop(
-                            roi_img, roi_mask_3ch, margin=32
+                            roi_img, roi_mask_3ch, margin=64
                         )
                         inpainted_res[y1:y2, x1:x2] = inpainted_roi
                     except Exception as e:
@@ -289,6 +301,26 @@ class MangaTranslatorPipeline:
                 packed_img.save(packed_path)
                 logger.info(f"Packed OCR image saved to: {packed_path}")
 
+                if self.ocr_engine:
+                    logger.info("Step 5: Calling Gemini OCR...")
+                    ocr_results = self.ocr_engine.ocr_packed(packed_img)
+                    logger.info(f"OCR results (first 3): {list(ocr_results.items())[:3]}")
+
+                    # Map back to original indices
+                    final_transcriptions = {}
+                    for item in mapping:
+                        v_idx = item["visual_idx"]
+                        o_idx = item["original_idx"]
+                        if v_idx in ocr_results:
+                            final_transcriptions[o_idx] = ocr_results[v_idx]
+
+                    # Save OCR results to a file
+                    ocr_res_path = os.path.join(dirs["ocr"], f"ocr_{filename}.txt")
+                    with open(ocr_res_path, "w", encoding="utf-8") as f:
+                        for idx, text in sorted(ocr_results.items()):
+                            f.write(f"TEXT_{idx}: {text}\n")
+                    logger.info(f"OCR results saved to: {ocr_res_path}")
+
         logger.info(f"Pipeline finished for: {filename}")
 
 def main():
@@ -312,9 +344,9 @@ def main():
 
 if __name__ == "__main__":
     # Example usage for quick testing
-    TEST_IMAGE = "sample/image_0277_idx285_webp.jpg"
+    TEST_IMAGE = "sample/3ff69466-329e-4fd6-b307-e3e0237e320c.png"
     if os.path.exists(TEST_IMAGE):
-        pipeline = MangaTranslatorPipeline(use_segmentation=True, use_inpainting=True)
+        pipeline = MangaTranslatorPipeline(use_segmentation=False, use_inpainting=False, use_ocr=True)
         pipeline.process_image(TEST_IMAGE)
     else:
         # If test image doesn't exist, just show help or run main()
