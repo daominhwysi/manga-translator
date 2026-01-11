@@ -20,3 +20,16 @@ class BaseDetector(ABC):
         Returns: List of dicts: [{'box': [x1, y1, x2, y2], 'label': 'text', 'conf': 0.9}]
         """
         pass
+
+    @staticmethod
+    def sort_detections(detections: List[Dict[str, Any]], sort_by: str = "xy") -> List[Dict[str, Any]]:
+        """
+        Sort detections by coordinates.
+        'xy': sort by x primarily, then y
+        'yx': sort by y primarily, then x
+        """
+        if sort_by == "xy":
+            return sorted(detections, key=lambda d: (d["box"][0], d["box"][1]))
+        elif sort_by == "yx":
+            return sorted(detections, key=lambda d: (d["box"][1], d["box"][0]))
+        return detections
