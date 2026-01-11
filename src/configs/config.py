@@ -1,17 +1,14 @@
 import os
 from dotenv import load_dotenv
 
-# Load variables from a .env file if it exists
 load_dotenv()
 
 
 class Config:
     """Base config."""
 
-    SECRET_KEY = os.getenv("SECRET_KEY", "default-secret-key")
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    DEBUG = False
-    TESTING = False
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-flash-lite-latest")
 
 
 class ModelWeightsConfig:
