@@ -344,9 +344,9 @@ def main():
 
 if __name__ == "__main__":
     # Example usage for quick testing
-    TEST_IMAGE = "sample/3ff69466-329e-4fd6-b307-e3e0237e320c.png"
+    TEST_IMAGE = "sample/image_0657_idx673_webp.jpg"
     if os.path.exists(TEST_IMAGE):
-        pipeline = MangaTranslatorPipeline(use_segmentation=False, use_inpainting=False, use_ocr=True)
+        pipeline = MangaTranslatorPipeline(use_segmentation=True, use_inpainting=True, use_ocr=True)
         pipeline.process_image(TEST_IMAGE)
     else:
         # If test image doesn't exist, just show help or run main()
