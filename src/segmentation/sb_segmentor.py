@@ -1,21 +1,18 @@
 import cv2
 import numpy as np
-from src.segmentation.segmentor import BaseSegmentor
-from src.segmentation.unet import Unet_MobileNet_small
 import torch
 import torch.nn.functional as F
 import os
 from tqdm import tqdm
 import requests
 from src.configs.config import ModelWeightsConfig
+from src.segmentation.segmentor import Unet_MobileNetV4
 
-
-class SpeechBubbleSegmentor(BaseSegmentor):
+class SpeechBubbleSegmentorMbnet:
     def __init__(self, model_path: str, conf_threshold: float = 0.3):
         self.model = None
         self.conf_threshold = conf_threshold
         self.model_path = model_path
-
         if not os.path.exists(model_path):
             self._download_weights(ModelWeightsConfig.SPEECH_BUBBLE_SEGMENTATION_URL, model_path)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -47,9 +44,12 @@ class SpeechBubbleSegmentor(BaseSegmentor):
         print(f"Download complete: {save_path}")
 
     def load_model(self, model_path: str):
-        self.model = Unet_MobileNet_small(in_channels=3, num_classes=2)
+        self.model = Unet_MobileNetV4(num_classes=1)
         state_dict = torch.load(model_path, map_location="cpu")
-        self.model.load_state_dict(state_dict=state_dict)
+        if "ema_state_dict" in state_dict:
+            self.model.load_state_dict(state_dict=state_dict["ema_state_dict"])
+        else:
+            self.model.load_state_dict(state_dict=state_dict)
         self.model.to(self.device)
         self.model.eval()
 
@@ -85,15 +85,11 @@ class SpeechBubbleSegmentor(BaseSegmentor):
 
         # 3. Inference
         with torch.no_grad():
-            # In eval mode, Unet_B1 returns only main_out (Batch, 2, H, W)
             output = self.model(img_tensor)
 
-            # Apply Softmax to get probabilities for the 2 classes
-            probs = F.softmax(output, dim=1)
-
-            # Extract the probability map for the text class (index 1)
-            # Shape: (H, W)
-            mask = probs[0, 1, :, :].cpu().numpy()
+            # Apply Sigmoid to get probabilities for the 1 class
+            probs = torch.sigmoid(output).squeeze(0).squeeze(0)
+            mask = probs.cpu().numpy()
 
         # 4. Post-processing
         # Apply threshold to create binary mask
@@ -109,7 +105,29 @@ class SpeechBubbleSegmentor(BaseSegmentor):
 
 if __name__ == "__main__":
     # Example usage:
-    segmentor = SpeechBubbleSegmentor("checkpoints/speech_bubble_segmentation.pth")
-    image = cv2.imread("sample/5.png")
-    mask = segmentor.segment(image)
-    cv2.imwrite("result.png", mask)
+    img_path = "sample/sample13.png"
+    output_path = "sb_result.png"
+    checkpoint_path = "checkpoints/mbnet_speech_bubble_seg.pth"
+
+    segmentor = SpeechBubbleSegmentorMbnet(checkpoint_path)
+
+    image = cv2.imread(img_path)
+    if image is None:
+        print(f"❌ Error: Could not read image '{img_path}'.")
+    else:
+        print(f"🚀 Starting inference on {img_path}...")
+        mask = segmentor.segment(image)  # Returns 0 or 255
+
+        # Visualization logic
+        h, w = image.shape[:2]
+        mask_vis = np.zeros((h, w, 3), dtype=np.uint8)
+        mask_vis[:, :, 0] = mask  # Blue channel for speech bubbles
+
+        overlay = image.copy()
+        # Where mask is 255, blend original and blue mask
+        sb_mask = mask > 0
+        overlay[sb_mask] = cv2.addWeighted(image, 0.5, mask_vis, 0.5, 0)[sb_mask]
+
+        combined = np.hstack([image, mask_vis, overlay])
+        cv2.imwrite(output_path, combined)
+        print(f"✅ Done! Result saved to: {output_path}")
