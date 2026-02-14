@@ -18,3 +18,4 @@ class ModelWeightsConfig:
     TEXT_DETECTION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/text_det_yolo.onnx"
     SPEECH_BUBBLE_SEGMENTATION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/mbnet_speech_bubble_seg.pth"
     TEXT_SEGMENTATION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/mbnet_manga_text_seg.pth"
+    SPEECH_BUBBLE_DETECTION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/speech_bubble_detector.pt"
