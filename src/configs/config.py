@@ -15,5 +15,6 @@ class ModelWeightsConfig:
     """Links and paths for AI model weights."""
 
     INPAINTING_MODEL_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/anime-manga-big-lama.pt"
-    TEXT_SEGMENTATION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/text_seg_unet_b1.pth"
+    TEXT_SEGMENTATION_URL = "https://huggingface.co/daominhwysi/mobilenet-manga-text-seg/resolve/main/best_manga_model_combined.pth"
     TEXT_DETECTION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/text_det_yolo.onnx"
+    SPEECH_BUBBLE_SEGMENTATION_URL = "https://github.com/daominhwysi/manga-translator/releases/download/weights/speech_bubble_seg_mbnet.pth"

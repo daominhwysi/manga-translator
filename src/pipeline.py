@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 
 # Internal imports
 from src.detection.manga_detector import TextDetector_YOLO
-from src.segmentation.text_segmentor import TextSegmentor_B1
+from src.segmentation.text_segmentor import TextSegmentorMbnet
 from src.inpainting.lama_cleaner import LamaCleaner
 from src.detection.detector import BaseDetector
 from src.ocr.gemini_ocr import GeminiOCR
@@ -38,7 +38,6 @@ class MangaTranslatorPipeline:
         self.text_segmenter = None
         self.inpainter = None
         self.ocr_engine = None
-        self._font_cache = {}
 
         self._initialize_models()
 
@@ -51,7 +50,7 @@ class MangaTranslatorPipeline:
 
         if self.use_segmentation:
             seg_path = os.path.join(self.model_dir, "text-segmentation.pth")
-            self.text_segmenter = TextSegmentor_B1(seg_path)
+            self.text_segmenter = TextSegmentorMbnet(seg_path)
 
         if self.use_inpainting:
             inp_path = os.path.join(self.model_dir, "anime-manga-big-lama.pt")
@@ -63,144 +62,6 @@ class MangaTranslatorPipeline:
                 self.ocr_engine = GeminiOCR()
         except Exception as e:
             logger.warning(f"Failed to initialize GeminiOCR: {e}")
-
-    def get_font(self, size: int) -> ImageFont:
-        """Caches and returns a font of the specified size."""
-        if size in self._font_cache:
-            return self._font_cache[size]
-
-        fonts_to_try = [
-            "arialbd.ttf",
-            "arial.ttf",
-            "DejaVuSans-Bold.ttf",
-            "FreeSansBold.ttf",
-        ]
-        font = None
-        for f in fonts_to_try:
-            try:
-                font = ImageFont.truetype(f, size)
-                break
-            except:
-                continue
-
-        if font is None:
-            font = ImageFont.load_default()
-
-        self._font_cache[size] = font
-        return font
-
-    def pack_rois(
-        self,
-        roi_list: List[Image.Image],
-        padding: int = 15,
-        border_size: int = 3,
-        target_ratio: float = 1.0
-    ) -> Tuple[Optional[Image.Image], List[Dict[str, Any]]]:
-        """
-        Packs multiple ROI images onto a single canvas with labels.
-        Returns the packed canvas and a mapping of visual indices to original indices.
-        """
-        if not roi_list:
-            return None, []
-
-        rois_processed = []
-        total_area = 0
-        max_roi_w = 0
-
-        for idx, img in enumerate(roi_list):
-            # 1. Add black border to distinguish from background
-            if border_size > 0:
-                img = ImageOps.expand(img, border=border_size, fill="black")
-
-            # 2. Calculate dynamic font size
-            dynamic_font_size = max(20, min(int((img.height) * 3.0) ** (1/2.5), 30))
-            font = self.get_font(int(dynamic_font_size))
-
-            # 3. Calculate label area
-            temp_label = f"TEXT_{idx}"
-            draw_temp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-            try:
-                bbox = draw_temp.textbbox((0, 0), temp_label, font=font)
-                text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            except:
-                text_w, text_h = dynamic_font_size * len(temp_label) * 0.7, dynamic_font_size
-
-            label_area_height = text_h + 20
-            new_w = max(img.width, int(text_w + 20))
-            new_h = img.height + label_area_height
-
-            # 4. Prepare combined roi canvas
-            combined_roi = Image.new("RGB", (new_w, new_h), (255, 255, 255))
-            paste_x = (new_w - img.width) // 2
-            combined_roi.paste(img, (paste_x, 0))
-
-            w_with_pad, h_with_pad = new_w + padding, new_h + padding
-            rois_processed.append({
-                "img": combined_roi,
-                "w": w_with_pad,
-                "h": h_with_pad,
-                "original_idx": idx,
-                "font": font,
-                "content_height": img.height,
-                "label_area_height": label_area_height
-            })
-
-            total_area += w_with_pad * h_with_pad
-            max_roi_w = max(max_roi_w, w_with_pad)
-
-        # 5. Shelf Packing Logic
-        rois_processed.sort(key=lambda x: x["h"], reverse=True)
-        ideal_width = math.sqrt(total_area * target_ratio)
-        max_width = max(int(ideal_width), max_roi_w)
-
-        packed_positions = []
-        curr_x, curr_y = 0, 0
-        shelf_height = 0
-        actual_max_w = 0
-
-        for item in rois_processed:
-            if curr_x + item["w"] > max_width:
-                curr_y += shelf_height
-                curr_x = 0
-                shelf_height = 0
-
-            packed_positions.append((item, curr_x, curr_y))
-            shelf_height = max(shelf_height, item["h"])
-            curr_x += item["w"]
-            actual_max_w = max(actual_max_w, curr_x)
-
-        # 6. Reindex and Draw Phase
-        # Sort by visual position: top-to-bottom, then left-to-right
-        packed_positions.sort(key=lambda p: (p[2], p[1]))
-
-        canvas = Image.new("RGB", (actual_max_w, curr_y + shelf_height), (255, 255, 255))
-        final_mapping = []
-
-        for new_idx, (item, x, y) in enumerate(packed_positions):
-            label_text = f"TEXT_{new_idx}"
-            font = item["font"]
-            img_h = item["content_height"]
-            lbl_h = item["label_area_height"]
-
-            draw = ImageDraw.Draw(item["img"])
-            try:
-                bbox = draw.textbbox((0, 0), label_text, font=font)
-                text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            except:
-                text_w, text_h = font.size * len(label_text) * 0.7, font.size
-
-            text_x = (item["img"].width - text_w) // 2
-            text_y = img_h + (lbl_h - text_h) // 2 - 5
-            draw.text((text_x, text_y), label_text, fill="red", font=font)
-
-            canvas.paste(item["img"], (x, y))
-            final_mapping.append({
-                "visual_idx": new_idx,
-                "original_idx": item["original_idx"],
-                "box_in_packed": [x, y, x + item["w"], y + item["h"]]
-            })
-
-        return canvas, final_mapping
 
     def _create_overlay(self, image: np.ndarray, mask: np.ndarray, color=(0, 0, 255), alpha=0.5) -> np.ndarray:
         """Utility to create a mask overlay on an image."""
@@ -293,33 +154,32 @@ class MangaTranslatorPipeline:
             cv2.imwrite(os.path.join(dirs["inp"], f"clean_{filename}"), inpainted_res)
 
         # 5.4 OCR Packing
-        if rois_for_ocr:
+        if rois_for_ocr and self.ocr_engine:
             logger.info("Step 4: Packing ROIs for OCR...")
-            packed_img, mapping = self.pack_rois(rois_for_ocr)
+            packed_img, mapping = self.ocr_engine.pack_rois(rois_for_ocr)
             if packed_img:
                 packed_path = os.path.join(dirs["ocr"], f"packed_ocr_{filename}")
                 packed_img.save(packed_path)
                 logger.info(f"Packed OCR image saved to: {packed_path}")
 
-                if self.ocr_engine:
-                    logger.info("Step 5: Calling Gemini OCR...")
-                    ocr_results = self.ocr_engine.ocr_packed(packed_img)
-                    logger.info(f"OCR results (first 3): {list(ocr_results.items())[:3]}")
+                logger.info("Step 5: Calling Gemini OCR...")
+                ocr_results = self.ocr_engine.ocr_packed(packed_img)
+                logger.info(f"OCR results (first 3): {list(ocr_results.items())[:3]}")
 
-                    # Map back to original indices
-                    final_transcriptions = {}
-                    for item in mapping:
-                        v_idx = item["visual_idx"]
-                        o_idx = item["original_idx"]
-                        if v_idx in ocr_results:
-                            final_transcriptions[o_idx] = ocr_results[v_idx]
+                # Map back to original indices
+                final_transcriptions = {}
+                for item in mapping:
+                    v_idx = item["visual_idx"]
+                    o_idx = item["original_idx"]
+                    if v_idx in ocr_results:
+                        final_transcriptions[o_idx] = ocr_results[v_idx]
 
-                    # Save OCR results to a file
-                    ocr_res_path = os.path.join(dirs["ocr"], f"ocr_{filename}.txt")
-                    with open(ocr_res_path, "w", encoding="utf-8") as f:
-                        for idx, text in sorted(ocr_results.items()):
-                            f.write(f"TEXT_{idx}: {text}\n")
-                    logger.info(f"OCR results saved to: {ocr_res_path}")
+                # Save OCR results to a file
+                ocr_res_path = os.path.join(dirs["ocr"], f"ocr_{filename}.txt")
+                with open(ocr_res_path, "w", encoding="utf-8") as f:
+                    for idx, text in sorted(ocr_results.items()):
+                        f.write(f"TEXT_{idx}: {text}\n")
+                logger.info(f"OCR results saved to: {ocr_res_path}")
 
         logger.info(f"Pipeline finished for: {filename}")
 
@@ -344,9 +204,9 @@ def main():
 
 if __name__ == "__main__":
     # Example usage for quick testing
-    TEST_IMAGE = "sample/3ff69466-329e-4fd6-b307-e3e0237e320c.png"
+    TEST_IMAGE = "sample/image_1615_idx1653_webp.jpg"
     if os.path.exists(TEST_IMAGE):
-        pipeline = MangaTranslatorPipeline(use_segmentation=False, use_inpainting=False, use_ocr=True)
+        pipeline = MangaTranslatorPipeline(use_segmentation=True, use_inpainting=True, use_ocr=True)
         pipeline.process_image(TEST_IMAGE)
     else:
         # If test image doesn't exist, just show help or run main()
