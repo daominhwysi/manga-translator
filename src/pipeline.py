@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 
 # Internal imports
 from src.detection.manga_detector import TextDetector_YOLO
-from src.segmentation.text_segmentor import TextSegmentor_B1
+from src.segmentation.text_segmentor import TextSegmentorMbnet
 from src.inpainting.lama_cleaner import LamaCleaner
 from src.detection.detector import BaseDetector
 from src.ocr.gemini_ocr import GeminiOCR
@@ -50,7 +50,7 @@ class MangaTranslatorPipeline:
 
         if self.use_segmentation:
             seg_path = os.path.join(self.model_dir, "text-segmentation.pth")
-            self.text_segmenter = TextSegmentor_B1(seg_path)
+            self.text_segmenter = TextSegmentorMbnet(seg_path)
 
         if self.use_inpainting:
             inp_path = os.path.join(self.model_dir, "anime-manga-big-lama.pt")
@@ -204,7 +204,7 @@ def main():
 
 if __name__ == "__main__":
     # Example usage for quick testing
-    TEST_IMAGE = "sample/image_0657_idx673_webp.jpg"
+    TEST_IMAGE = "sample/image_1615_idx1653_webp.jpg"
     if os.path.exists(TEST_IMAGE):
         pipeline = MangaTranslatorPipeline(use_segmentation=True, use_inpainting=True, use_ocr=True)
         pipeline.process_image(TEST_IMAGE)
