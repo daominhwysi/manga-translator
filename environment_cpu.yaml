@@ -27,3 +27,4 @@ dependencies:
       - transformers
       - torch
       - torchvision
+      - timm

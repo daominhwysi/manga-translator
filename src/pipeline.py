@@ -8,8 +8,10 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 # Internal imports
-from src.detection.manga_detector import TextDetector_YOLO
+from src.detection.manga_text_detector import TextDetector_YOLO
+from src.detection.speech_bubble_detector import SpeechBubbleDetector_YOLO
 from src.segmentation.text_segmentor import TextSegmentorMbnet
+from src.segmentation.sb_segmentor import SpeechBubbleSegmentorMbnet
 from src.inpainting.lama_cleaner import LamaCleaner
 from src.detection.detector import BaseDetector
 from src.ocr.gemini_ocr import GeminiOCR
@@ -23,12 +25,16 @@ class MangaTranslatorPipeline:
         self,
         model_dir: str = "checkpoints",
         use_segmentation: bool = True,
+        use_sb_detection: bool = True,
+        use_sb_segmentation: bool = True,
         use_inpainting: bool = True,
         use_ocr: bool = True,
         device: str = "cuda"
     ):
         self.model_dir = model_dir
         self.use_segmentation = use_segmentation
+        self.use_sb_detection = use_sb_detection
+        self.use_sb_segmentation = use_sb_segmentation
         self.use_inpainting = use_segmentation and use_inpainting
         self.use_ocr = use_ocr
 
@@ -36,6 +42,8 @@ class MangaTranslatorPipeline:
 
         self.text_detector = None
         self.text_segmenter = None
+        self.sb_detector = None
+        self.sb_segmenter = None
         self.inpainter = None
         self.ocr_engine = None
 
@@ -51,6 +59,14 @@ class MangaTranslatorPipeline:
         if self.use_segmentation:
             seg_path = os.path.join(self.model_dir, "text-segmentation.pth")
             self.text_segmenter = TextSegmentorMbnet(seg_path)
+
+        if self.use_sb_segmentation:
+            if self.use_sb_detection:
+                sb_det_path = os.path.join(self.model_dir, "speech_bubble_detector.pt")
+                self.sb_detector = SpeechBubbleDetector_YOLO(sb_det_path)
+
+            sb_seg_path = os.path.join(self.model_dir, "mbnet_speech_bubble_seg.pth")
+            self.sb_segmenter = SpeechBubbleSegmentorMbnet(sb_seg_path)
 
         if self.use_inpainting:
             inp_path = os.path.join(self.model_dir, "anime-manga-big-lama.pt")
@@ -78,6 +94,7 @@ class MangaTranslatorPipeline:
         dirs = {
             "det": os.path.join(output_dir, "text_detection"),
             "seg": os.path.join(output_dir, "text_segmentation"),
+            "sb_seg": os.path.join(output_dir, "speech_bubble_segmentation"),
             "inp": os.path.join(output_dir, "inpainting_results"),
             "ocr": os.path.join(output_dir, "ocr_packing")
         }
@@ -99,7 +116,29 @@ class MangaTranslatorPipeline:
         detections = BaseDetector.sort_detections(detections, sort_by="xy")
         logger.info(f"Found {len(detections)} text regions.")
 
+        # 3.5 Speech Bubble Segmentation Phase
+        if self.use_sb_segmentation:
+            logger.info("Step 2: Segmenting speech bubbles...")
+            if self.use_sb_detection and self.sb_detector:
+                sb_detections = self.sb_detector.detect(img_bgr)
+                sb_mask = np.zeros((h, w), dtype=np.uint8)
+                for det in sb_detections:
+                    bx1, by1, bx2, by2 = map(int, det["box"])
+                    bx1, by1, bx2, by2 = max(0, bx1), max(0, by1), min(w, bx2), min(h, by2)
+                    sb_roi = img_bgr[by1:by2, bx1:bx2]
+                    if sb_roi.size == 0:
+                        continue
+                    roi_sb_mask = self.sb_segmenter.segment(sb_roi)
+                    sb_mask[by1:by2, bx1:bx2] = cv2.bitwise_or(sb_mask[by1:by2, bx1:bx2], roi_sb_mask)
+            else:
+                sb_mask = self.sb_segmenter.segment(img_bgr)
+
+            sb_overlay = self._create_overlay(img_bgr, sb_mask, color=(255, 0, 0))  # Blue overlay for bubbles
+            cv2.imwrite(os.path.join(dirs["sb_seg"], f"sb_mask_{filename}"), sb_mask)
+            cv2.imwrite(os.path.join(dirs["sb_seg"], f"sb_overlay_{filename}"), sb_overlay)
+
         # 4. Processing & ROI Collection
+        logger.info("Step 3: Processing text regions...")
         global_mask = np.zeros((h, w), dtype=np.uint8)
         kernel = np.ones((3, 3), np.uint8)
         rois_for_ocr = []
@@ -189,7 +228,9 @@ def main():
     parser.add_argument("--image", type=str, required=True, help="Path to input image")
     parser.add_argument("--output", type=str, default="output_dev", help="Output directory")
     parser.add_argument("--models", type=str, default="checkpoints", help="Model directory")
-    parser.add_argument("--no-seg", action="store_true", help="Disable segmentation")
+    parser.add_argument("--no-seg", action="store_true", help="Disable text segmentation")
+    parser.add_argument("--no-sb-det", action="store_true", help="Disable speech bubble detection")
+    parser.add_argument("--no-sb-seg", action="store_true", help="Disable speech bubble segmentation")
     parser.add_argument("--no-inp", action="store_true", help="Disable inpainting")
 
     args = parser.parse_args()
@@ -197,6 +238,8 @@ def main():
     pipeline = MangaTranslatorPipeline(
         model_dir=args.models,
         use_segmentation=not args.no_seg,
+        use_sb_detection=not args.no_sb_det,
+        use_sb_segmentation=not args.no_sb_seg,
         use_inpainting=not args.no_inp
     )
 
@@ -204,9 +247,9 @@ def main():
 
 if __name__ == "__main__":
     # Example usage for quick testing
-    TEST_IMAGE = "sample/image_1615_idx1653_webp.jpg"
+    TEST_IMAGE = "sample/image_0277_idx285_webp.jpg"
     if os.path.exists(TEST_IMAGE):
-        pipeline = MangaTranslatorPipeline(use_segmentation=True, use_inpainting=True, use_ocr=True)
+        pipeline = MangaTranslatorPipeline(use_segmentation=True,use_sb_segmentation=True, use_inpainting=True, use_ocr=True)
         pipeline.process_image(TEST_IMAGE)
     else:
         # If test image doesn't exist, just show help or run main()
