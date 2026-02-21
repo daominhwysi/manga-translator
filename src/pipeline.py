@@ -13,9 +13,8 @@ from src.detection.speech_bubble_detector import SpeechBubbleDetector_YOLO
 from src.segmentation.text_segmentor import TextSegmentorMbnet
 from src.segmentation.sb_segmentor import SpeechBubbleSegmentorMbnet
 from src.inpainting.lama_cleaner import LamaCleaner
-from src.detection.detector import BaseDetector
 from src.ocr.gemini_ocr import GeminiOCR
-
+from src.detection.detector import BaseDetector
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -60,11 +59,11 @@ class MangaTranslatorPipeline:
             seg_path = os.path.join(self.model_dir, "text-segmentation.pth")
             self.text_segmenter = TextSegmentorMbnet(seg_path)
 
-        if self.use_sb_segmentation:
-            if self.use_sb_detection:
-                sb_det_path = os.path.join(self.model_dir, "speech_bubble_detector.pt")
-                self.sb_detector = SpeechBubbleDetector_YOLO(sb_det_path)
+        if self.use_sb_detection:
+            sb_det_path = os.path.join(self.model_dir, "speech_bubble_detector.pt")
+            self.sb_detector = SpeechBubbleDetector_YOLO(sb_det_path)
 
+        if self.use_sb_segmentation:
             sb_seg_path = os.path.join(self.model_dir, "mbnet_speech_bubble_seg.pth")
             self.sb_segmenter = SpeechBubbleSegmentorMbnet(sb_seg_path)
 
@@ -93,6 +92,7 @@ class MangaTranslatorPipeline:
         # 1. Setup Output Directories
         dirs = {
             "det": os.path.join(output_dir, "text_detection"),
+            "sb_det": os.path.join(output_dir, "speech_bubble_detection"),
             "seg": os.path.join(output_dir, "text_segmentation"),
             "sb_seg": os.path.join(output_dir, "speech_bubble_segmentation"),
             "inp": os.path.join(output_dir, "inpainting_results"),
@@ -116,12 +116,18 @@ class MangaTranslatorPipeline:
         detections = BaseDetector.sort_detections(detections, sort_by="xy")
         logger.info(f"Found {len(detections)} text regions.")
 
-        # 3.5 Speech Bubble Segmentation Phase
+        # 3.5 Speech Bubble Detection & Segmentation Phase
+        sb_detections = []
+        if self.use_sb_detection and self.sb_detector:
+            logger.info("Step 2a: Detecting speech bubbles...")
+            sb_detections = self.sb_detector.detect(img_bgr)
+            sb_detections = BaseDetector.sort_detections(sb_detections, sort_by="xy")
+            logger.info(f"Found {len(sb_detections)} speech bubbles.")
+
         if self.use_sb_segmentation:
-            logger.info("Step 2: Segmenting speech bubbles...")
-            if self.use_sb_detection and self.sb_detector:
-                sb_detections = self.sb_detector.detect(img_bgr)
-                sb_mask = np.zeros((h, w), dtype=np.uint8)
+            logger.info("Step 2b: Segmenting speech bubbles...")
+            sb_mask = np.zeros((h, w), dtype=np.uint8)
+            if sb_detections:
                 for det in sb_detections:
                     bx1, by1, bx2, by2 = map(int, det["box"])
                     bx1, by1, bx2, by2 = max(0, bx1), max(0, by1), min(w, bx2), min(h, by2)
@@ -181,6 +187,14 @@ class MangaTranslatorPipeline:
             x1, y1, x2, y2 = map(int, det["box"])
             cv2.rectangle(det_viz, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.imwrite(os.path.join(dirs["det"], f"det_{filename}"), det_viz)
+
+        # 5.1.1 Speech Bubble Detection Visualization
+        if sb_detections:
+            sb_det_viz = img_bgr.copy()
+            for det in sb_detections:
+                x1, y1, x2, y2 = map(int, det["box"])
+                cv2.rectangle(sb_det_viz, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Blue for bubbles
+            cv2.imwrite(os.path.join(dirs["sb_det"], f"sb_det_{filename}"), sb_det_viz)
 
         # 5.2 Segmentation
         if self.use_segmentation:
@@ -247,7 +261,7 @@ def main():
 
 if __name__ == "__main__":
     # Example usage for quick testing
-    TEST_IMAGE = "sample/image_0277_idx285_webp.jpg"
+    TEST_IMAGE = "sample/3.jpg"
     if os.path.exists(TEST_IMAGE):
         pipeline = MangaTranslatorPipeline(use_segmentation=True,use_sb_segmentation=True, use_inpainting=True, use_ocr=True)
         pipeline.process_image(TEST_IMAGE)
