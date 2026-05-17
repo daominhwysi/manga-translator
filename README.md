@@ -1,144 +1,129 @@
-# Manga Translator
+# ⛩️ Manga Translator
 
-An automated manga/comic text translation pipeline that detects, segments, removes, and transcribes text from manga/comic images using deep learning models and the Google Gemini API.
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/)
+[![Pixi](https://img.shields.io/badge/package--manager-pixi-green.svg)](https://pixi.sh)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Pipeline Overview
+An end-to-end, deep learning-powered manga and comic translation pipeline. It automatically detects, segments, erases (inpaints), transcribes, and re-renders translated text onto manga pages using high-performance object detection/segmentation networks combined with the **Google Gemini API**.
 
-```
-Input Image
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  1. Text Detection (YOLOv8)         │  ──  Bounding boxes around text regions
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  2. Speech Bubble Segmentation       │  ──  Pixel mask of speech bubble areas
-│     (YOLOv8 + MobileNetV4 U-Net)    │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  3. Text Segmentation (MobileNetV4   │  ──  Pixel mask of text within each ROI
-│     U-Net)                          │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  4. Text Inpainting (LaMa)          │  ──  Image with text removed
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  5. OCR Packing & Transcription     │  ──  Transcribed text via Gemini
-│     (Google Gemini API)             │
-└─────────────────────────────────────┘
-    │
-    ▼
-Output: Cleaned image + transcribed text
+---
+
+## 🗺️ Pipeline Architecture
+
+The translation process flows through a modular, multi-stage pipeline designed for visual quality and transcription accuracy:
+
+```mermaid
+graph TD
+    Input[Input Image BGR] --> Step1[1. Text Detection YOLOv8]
+    Input --> Step2[2. Speech Bubble Detection YOLOv8]
+    Step2 --> Step3[3. Speech Bubble Segmentation U-Net]
+    
+    Step1 --> Align[4. Alignment & Expansion]
+    Step3 --> Align
+    
+    Align --> Filter[Filter & Refine Boxes]
+    Filter --> Crop[5. ROI Extraction & Segment]
+    Crop --> Inpaint[6. LaMa Inpainting BGR]
+    Crop --> Pack[7. OCR Shelf Packing]
+    
+    Pack --> GeminiOCR[8. Gemini OCR XML Parsing]
+    GeminiOCR --> Translate[9. Gemini Translation XML]
+    Translate --> Render[10. Text Rendering PIL -> BGR]
+    
+    Inpaint --> Render
+    Render --> Output[Output: Cleaned & Rendered Image]
 ```
 
-Each stage can be individually enabled or disabled via pipeline configuration.
+1. **Text Detection (YOLOv8):** Bounding boxes are localized around all text regions.
+2. **Bubble Segmentation (YOLOv8 + U-Net):** Captures pixel-level shapes of speech bubbles.
+3. **Geometric Alignment:** Correlates detected text regions to bubbles using Jaccard index (IoU) and expands rendering boundaries within bubble polygon masks.
+4. **Text Erasure (MobileNetV4 + LaMa):** Segments text characters at pixel level and performs context-aware inpainting to restore the clean background.
+5. **OCR Packing & Translation:** Packs cropped text regions onto a single labeled canvas with a shelf-packing algorithm. Sends a single batch request to Gemini with custom XML schemas for fast, cost-efficient transcription and translation.
+6. **Adaptive Re-rendering:** Formats and draws the translated text centered vertically and horizontally within the expanded coordinates.
 
-## Features
+---
 
-- **Text Detection** — YOLOv8-based detection of text regions in manga/comic images
-- **Speech Bubble Detection** — YOLOv8-based detection of speech bubble regions for targeted processing
-- **Text Segmentation** — MobileNetV4-based U-Net with scSE attention for pixel-level text segmentation
-- **Speech Bubble Segmentation** — MobileNetV4-based U-Net for pixel-level speech bubble segmentation
-- **Text Inpainting** — LaMa (Large Mask Inpainting) model to remove text from images while preserving background
-- **OCR Transcription** — Google Gemini-powered OCR with shelf-packing optimization for batched processing of multiple text regions
-- **Modular Pipeline** — Each component can be enabled/disabled independently
+## ✨ Features
 
-## Requirements
+*   **⚡ Modern Package Management** — Fully integrated with **Pixi** for cross-platform, deterministic dependency resolution.
+*   **🖼️ High-Quality Inpainting** — Leverages TorchScript-compiled **LaMa (Large Mask Inpainting)** fine-tuned on anime/manga art.
+*   **🧠 Robust Attention Segmentation** — MobileNetV4 U-Net with **scSE attention blocks** and auxiliary deep supervision heads.
+*   **📉 API Cost Optimization** — Combines multiple cropped text Regions of Interest (ROIs) onto a single shelf-packed canvas, reducing Gemini API calls and ensuring context-aware OCR.
+*   **🛡️ XML-Structured LLM Protocol** — Uses solid, regular-expression-parsed XML tags for OCR and translations, eliminating formatting errors common with raw JSON prompts.
+*   **🎨 Polygon-Constrained Text Expansion** — Dynamically grows text blocks outwards until they hit the contours of the speech bubble mask.
 
-- Python 3.10
-- See `environment_cpu.yaml` or `requirements.txt` for full dependency list
+---
 
-### Key Dependencies
+## 🚀 Quick Start
 
-| Component         | Library/Tool              |
-|-------------------|---------------------------|
-| Deep Learning     | PyTorch, TorchVision      |
-| Object Detection  | Ultralytics YOLOv8        |
-| Image Processing  | OpenCV, Pillow, NumPy     |
-| Model Hub         | timm, HuggingFace Hub     |
-| OCR API           | Google Generative AI SDK  |
-| ONNX Runtime      | onnx, onnxruntime         |
+### 1. Installation
 
-## Installation
-
-### Conda (Recommended)
+This project is built using [Pixi](https://pixi.sh). To set up the environment and download all dependencies automatically, simply install Pixi and run:
 
 ```bash
-conda env create -f environment_cpu.yaml
-conda activate manga-translator
+# Clone the repository
+git clone https://github.com/daominhwysi/manga-translator.git
+cd manga-translator
+
+# Install dependencies and prepare virtual environment
+pixi install
 ```
 
-### Pip
+### 2. Environment Setup
 
-```bash
-pip install -r requirements.txt
-```
-
-### Environment Setup
-
-Create a `.env` file in the project root:
+Create a `.env` file in the root directory:
 
 ```env
-GEMINI_API_KEY=your_google_gemini_api_key
+GEMINI_API_KEY=your_google_gemini_api_key_here
+GEMINI_MODEL_NAME=gemini-2.0-flash-lite  # Optional
 ```
 
-Optionally, you can set the Gemini model name:
+### 3. Running the Pipeline
 
-```env
-GEMINI_MODEL_NAME=gemini-2.0-flash-lite
-```
-
-## Model Weights
-
-All model weights are automatically downloaded from GitHub Releases on first use. They are stored in the `checkpoints/` directory.
-
-| Model                        | File                                  | Source                                                                                     |
-|------------------------------|---------------------------------------|--------------------------------------------------------------------------------------------|
-| Text Detection               | `text_det_yolo.onnx`                  | YOLOv8 ONNX model trained on manga text                                                   |
-| Text Segmentation            | `text-segmentation.pth`               | MobileNetV4 U-Net with scSE attention                                                      |
-| Speech Bubble Detection      | `speech_bubble_detector.pt`           | YOLOv8 PyTorch model for speech bubble detection                                           |
-| Speech Bubble Segmentation   | `mbnet_speech_bubble_seg.pth`         | MobileNetV4 U-Net for speech bubble masks                                                  |
-| Inpainting                   | `anime-manga-big-lama.pt`             | LaMa model fine-tuned on anime/manga artwork (TorchScript)                                 |
-
-Weights are hosted at: `https://github.com/daominhwysi/manga-translator/releases/download/weights/`
-
-Model URLs are configured in `src/configs/config.py` under `ModelWeightsConfig`.
-
-## Usage
-
-### Command Line
+Translate any manga page instantly:
 
 ```bash
-python src/pipeline.py --image path/to/manga_page.jpg --output output_dir --models checkpoints
+pixi run translate --image sample/image_0277_idx285_webp.jpg --target-lang English
 ```
 
-#### Options
+---
 
-| Argument          | Description                            | Default         |
-|-------------------|----------------------------------------|-----------------|
-| `--image`         | Path to input image (required)         | —               |
-| `--output`        | Output directory                       | `output_dev`    |
-| `--models`        | Directory containing model weights     | `checkpoints`   |
-| `--no-seg`        | Disable text segmentation              | `False`         |
-| `--no-sb-det`     | Disable speech bubble detection        | `False`         |
-| `--no-sb-seg`     | Disable speech bubble segmentation     | `False`         |
-| `--no-inp`        | Disable inpainting                     | `False`         |
+## 🎨 Command Line Usage
 
-Note: Inpainting is automatically disabled when text segmentation is disabled (`--no-seg`).
+Use the pipeline CLI via `pixi run translate` (or directly via `python src/pipeline.py` inside the activated env):
 
-### Programmatic API
+```bash
+pixi run translate [OPTIONS]
+```
+
+### Options Reference
+
+| Argument | Type | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `--image` | `str` | `None` | Path to a single input image. |
+| `--input-dir` | `str` | `None` | Process all supported images in this directory in batch. |
+| `--output` | `str` | `output_dev` | Directory where output assets are saved. |
+| `--models` | `str` | `checkpoints` | Directory storing neural network model weights. |
+| `--source-lang`| `str` | `auto` | Language of the input text (e.g. `Japanese`, `auto`). |
+| `--target-lang`| `str` | `English` | Target translation language. |
+| `--no-seg` | `flag`| — | Disable text segmentation. |
+| `--no-sb-det` | `flag`| — | Disable speech bubble bounding box detection. |
+| `--no-sb-seg` | `flag`| — | Disable speech bubble pixel segmentation. |
+| `--no-inp` | `flag`| — | Disable LaMa inpainting. |
+| `--no-ocr` | `flag`| — | Disable Gemini OCR transcription. |
+| `--no-translate`| `flag`| — | Disable text translation. |
+| `--device` | `str` | `cuda` | Hardware execution backend (`cuda` or `cpu`). |
+
+---
+
+## 🤖 Programmatic API
+
+You can import and run the modular pipeline within your own custom scripts:
 
 ```python
 from src.pipeline import MangaTranslatorPipeline
 
+# Initialize the pipeline components
 pipeline = MangaTranslatorPipeline(
     model_dir="checkpoints",
     use_segmentation=True,
@@ -146,127 +131,80 @@ pipeline = MangaTranslatorPipeline(
     use_sb_segmentation=True,
     use_inpainting=True,
     use_ocr=True,
-    device="cuda"  # or "cpu"
+    device="cuda"
 )
 
-pipeline.process_image("path/to/manga_page.jpg", output_dir="output_dev")
+# Run translation workflow
+results = pipeline.process_image(
+    image_path="sample/image_0277_idx285_webp.jpg",
+    output_dir="output_dev"
+)
+
+print(f"Processed {results['detections']} text boxes!")
 ```
 
-### Using Individual Components
+---
 
-```python
-# Text Detection
-from src.detection.manga_text_detector import TextDetector_YOLO
-detector = TextDetector_YOLO("checkpoints/text_det_yolo.onnx", conf_threshold=0.3)
-detections = detector.detect(image_bgr)
+## 📁 Output Directory Layout
 
-# Text Segmentation
-from src.segmentation.text_segmentor import TextSegmentorMbnet
-segmentor = TextSegmentorMbnet("checkpoints/text-segmentation.pth")
-mask = segmentor.segment(image_bgr)
-
-# Inpainting
-from src.inpainting.lama_cleaner import LamaCleaner
-inpainter = LamaCleaner("checkpoints/anime-manga-big-lama.pt")
-result = inpainter.inpaint_with_crop(image, mask, margin=128)
-
-# OCR
-from src.ocr.gemini_ocr import GeminiOCR
-ocr = GeminiOCR()
-text = ocr.ocr(image_pil)
-```
-
-## Output Structure
+Pipeline execution outputs structured assets under your designated output folder:
 
 ```
 output_dev/
-├── text_detection/             # Bounding box visualizations
+├── text_detection/             # YOLOv8 bounding box plots
 │   └── det_{filename}
-├── text_segmentation/          # Text region masks and overlays
+├── text_segmentation/          # Isolated character masks and overlays
 │   ├── mask_{filename}
 │   └── overlay_{filename}
 ├── speech_bubble_segmentation/ # Speech bubble masks and overlays
 │   ├── sb_mask_{filename}
 │   └── sb_overlay_{filename}
-├── inpainting_results/         # Images with text removed
+├── inpainting_results/         # Cleaned background (text removed)
 │   └── clean_{filename}
-└── ocr_packing/                # Packed OCR images and transcripts
-    ├── packed_ocr_{filename}
-    └── ocr_{filename}.txt
+├── ocr_packing/                # Shelf-packed canvas and transcription text
+│   ├── packed_ocr_{filename}
+│   └── ocr_{filename}.txt
+├── polygon_alignment/          # Geometric expansion debug mappings
+│   └── poly_align_{filename}
+└── translated/                 # Final translated text files and rendered images
+    ├── translated_{filename}.txt
+    └── rendered_{filename}
 ```
 
-## Project Structure
+---
 
-```
-manga-translator/
-├── src/
-│   ├── configs/
-│   │   ├── config.py              # API keys, model weight URLs
-│   │   └── prompt_templates.py    # OCR prompt templates (reserved)
-│   ├── detection/
-│   │   ├── detector.py            # Abstract base detector class
-│   │   ├── manga_text_detector.py # YOLOv8 text detection
-│   │   └── speech_bubble_detector.py # YOLOv8 speech bubble detection
-│   ├── inpainting/
-│   │   └── lama_cleaner.py        # LaMa-based inpainting
-│   ├── ocr/
-│   │   └── gemini_ocr.py          # Gemini API OCR with ROI packing
-│   ├── segmentation/
-│   │   ├── segmentor.py           # U-Net architectures (EfficientViT, MobileNetV4)
-│   │   ├── text_segmentor.py      # Text segmentation wrapper
-│   │   └── sb_segmentor.py        # Speech bubble segmentation wrapper
-│   └── pipeline.py                # Main pipeline orchestrator + CLI
-├── sample/                        # Sample images for testing
-├── output_dev/                    # Default output directory
-├── test/
-│   └── transform_weights.py       # Checkpoint transformation utility
-├── requirements.txt               # Pip dependencies
-├── environment_cpu.yaml           # Conda environment (CPU)
-└── .env                           # API keys (gitignored)
-```
+## 🧠 Model Checkpoints
 
-## Architecture Details
+Model checkpoints are hosted on GitHub Releases and are **automatically downloaded** on first execution.
 
-### Segmentation Models (`src/segmentation/segmentor.py`)
+| Component | Weights Checkpoint | Download Source |
+| :--- | :--- | :--- |
+| **Text Detection** | `text_det_yolo.onnx` | Trained YOLOv8 ONNX model |
+| **Text Segmentation** | `text-segmentation.pth` | MobileNetV4 U-Net with scSE attention |
+| **Bubble Detection** | `speech_bubble_detector.pt` | YOLOv8 PyTorch model |
+| **Bubble Segmentation**| `mbnet_speech_bubble_seg.pth` | MobileNetV4 U-Net |
+| **Inpainting** | `anime-manga-big-lama.pt` | LaMa model in TorchScript JIT format |
 
-Two U-Net architectures are defined:
+All URLs are managed in `src/configs/config.py` ([config.py](file:///d:/project/manga-translator/src/configs/config.py)).
 
-- **`Unet_MobileNetV4`** (default) — MobileNetV4 hybrid medium backbone with U-Net decoder. Features scSE attention modules, ASPP bottleneck, and deep supervision (auxiliary loss heads at multiple scales during training). Outputs single-channel logits for binary segmentation. Input size: 256×256.
+---
 
-- **`Unet_EfficientViT_B2`** — EfficientViT-B2 backbone with similar decoder structure. Configured with dilated convolutions in the bottleneck stage.
+## 🛠️ VS Code & Pyright Syncing
 
-Both models support `freeze_backbone()` and `unfreeze_backbone()` for fine-tuning.
+To ensure the VS Code language server resolves imports successfully, a `pyrightconfig.json` is bundled in the workspace:
 
-### OCR Packing (`src/ocr/gemini_ocr.py`)
-
-The OCR module uses a **shelf-packing algorithm** to arrange multiple text region ROIs onto a single canvas, each labeled with `TEXT_n` identifiers. This minimizes API calls and provides structured output. The packed image is sent to Gemini with a prompt requesting line-by-line transcription, which is then parsed and mapped back to original ROI indices.
-
-### Inpainting (`src/inpainting/lama_cleaner.py`)
-
-The LaMa inpainter processes each text region independently with a margin-based crop strategy. It:
-1. Converts the mask to grayscale binary
-2. Computes a bounding box around non-zero mask pixels with configurable margin
-3. Crops the image and mask to this box (with dimensions rounded to multiples of 8)
-4. Runs the LaMa TorchScript model
-5. Blends the inpainted region back into the original image
-
-## Configuration
-
-Key configuration is in `src/configs/config.py`:
-
-```python
-class Config:
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash-lite")
-
-class ModelWeightsConfig:
-    INPAINTING_MODEL_URL = "..."
-    TEXT_DETECTION_URL = "..."
-    SPEECH_BUBBLE_SEGMENTATION_URL = "..."
-    TEXT_SEGMENTATION_URL = "..."
-    SPEECH_BUBBLE_DETECTION_URL = "..."
+```json
+{
+    "venvPath": ".pixi/envs",
+    "venv": "default",
+    "extraPaths": [
+        "src"
+    ]
+}
 ```
 
-## License
+---
 
-[MIT](LICENSE)
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
