@@ -1,51 +1,24 @@
 import cv2
 import numpy as np
 import torch
-import torch.nn.functional as F
 import os
-from tqdm import tqdm
-import requests
 from src.configs.config import ModelWeightsConfig
 from src.segmentation.segmentor import Unet_MobileNetV4
+from src.utils import download_weights
 
 class SpeechBubbleSegmentorMbnet:
-    def __init__(self, model_path: str, conf_threshold: float = 0.3):
-        self.model = None
+    def __init__(self, model_path: str, conf_threshold: float = 0.3, device="cuda"):
+        self.model: Unet_MobileNetV4 | None = None
         self.conf_threshold = conf_threshold
         self.model_path = model_path
         if not os.path.exists(model_path):
-            self._download_weights(ModelWeightsConfig.SPEECH_BUBBLE_SEGMENTATION_URL, model_path)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            download_weights(ModelWeightsConfig.SPEECH_BUBBLE_SEGMENTATION_URL, model_path)
+        self.device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
         self.load_model(model_path)
-
-    def _download_weights(self, url: str, save_path: str):
-        print(f"Downloading model weights from {url}...")
-
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        response = requests.get(url, stream=True)
-        total_size = int(response.headers.get("content-length", 0))
-
-        # Use tqdm for a progress bar
-        with (
-            open(save_path, "wb") as file,
-            tqdm(
-                desc=os.path.basename(save_path),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar,
-        ):
-            for data in response.iter_content(chunk_size=1024):
-                size = file.write(data)
-                bar.update(size)
-        print(f"Download complete: {save_path}")
 
     def load_model(self, model_path: str):
         self.model = Unet_MobileNetV4(num_classes=1)
-        state_dict = torch.load(model_path, map_location="cpu")
+        state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
         if "ema_state_dict" in state_dict:
             self.model.load_state_dict(state_dict=state_dict["ema_state_dict"])
         else:
@@ -84,6 +57,8 @@ class SpeechBubbleSegmentorMbnet:
         img_tensor = img_tensor.to(self.device)
 
         # 3. Inference
+        if self.model is None:
+            raise RuntimeError("Speech bubble segmentation model not loaded")
         with torch.no_grad():
             output = self.model(img_tensor)
 

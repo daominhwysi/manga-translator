@@ -1,9 +1,0 @@
-ultralytics
-onnx
-onnxruntime
-numpy
-opencv-python-headless
-transformers
-torch
-torchvision
-google-genai

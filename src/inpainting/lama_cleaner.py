@@ -3,9 +3,8 @@ import torch
 import cv2
 import numpy as np
 from PIL import Image
-import requests
-from tqdm import tqdm
 from src.configs.config import ModelWeightsConfig
+from src.utils import download_weights
 
 
 class LamaCleaner:
@@ -13,38 +12,13 @@ class LamaCleaner:
     LaMa-based inpainting model for image restoration.
     """
 
-    def __init__(self, model_path):
+    def __init__(self, model_path, device="cuda"):
         if not os.path.exists(model_path):
-            self._download_weights(ModelWeightsConfig.INPAINTING_MODEL_URL, model_path)
+            download_weights(ModelWeightsConfig.INPAINTING_MODEL_URL, model_path)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(device if device == "cuda" and torch.cuda.is_available() else "cpu")
         self.model = torch.jit.load(model_path, map_location="cpu").to(self.device)
         self.model.eval()
-
-    def _download_weights(self, url: str, save_path: str):
-        print(f"Downloading model weights from {url}...")
-
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        response = requests.get(url, stream=True)
-        total_size = int(response.headers.get("content-length", 0))
-
-        # Use tqdm for a progress bar
-        with (
-            open(save_path, "wb") as file,
-            tqdm(
-                desc=os.path.basename(save_path),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar,
-        ):
-            for data in response.iter_content(chunk_size=1024):
-                size = file.write(data)
-                bar.update(size)
-        print(f"Download complete: {save_path}")
 
     def convert_cv2_mask(self, mask_buffer):
         mask = cv2.cvtColor(mask_buffer, cv2.COLOR_BGR2GRAY)
@@ -71,8 +45,7 @@ class LamaCleaner:
         return x1, y1, x2, y2
 
     def inpaint_with_crop(self, image_buffer, mask_buffer, margin=128):
-        img_bgr = cv2.cvtColor(image_buffer, cv2.COLOR_BGR2RGB)
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_rgb = cv2.cvtColor(image_buffer, cv2.COLOR_BGR2RGB)
         mask = self.convert_cv2_mask(mask_buffer)
 
         x1, y1, x2, y2 = self.get_bounding_box(mask, margin)
