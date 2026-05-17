@@ -60,14 +60,44 @@ def get_cached_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     if size in _font_cache:
         return _font_cache[size]
 
-    fonts_to_try = [
+    fonts_to_try = []
+
+    # Priority 1: Check custom MTO fonts inside font/MTO directory
+    custom_font_dir = os.path.join(os.getcwd(), "font", "MTO")
+    if os.path.exists(custom_font_dir):
+        # Preferred MTO dialogue fonts
+        preferred_dialogue = [
+            "MTO Astro City.ttf",
+            "MTO COMIC 1.ttf",
+            "MTO COMIC 2.ttf",
+            "MTO Wahroonga.ttf",
+            "MTO augie.ttf"
+        ]
+        for font_name in preferred_dialogue:
+            font_path = os.path.join(custom_font_dir, font_name)
+            if os.path.exists(font_path):
+                fonts_to_try.append(font_path)
+
+        # Add any other MTO fonts in the directory
+        try:
+            for f in sorted(os.listdir(custom_font_dir)):
+                if f.lower().endswith((".ttf", ".otf")):
+                    font_path = os.path.join(custom_font_dir, f)
+                    if font_path not in fonts_to_try:
+                        fonts_to_try.append(font_path)
+        except Exception:
+            pass
+
+    # Priority 2: Standard system fallback fonts
+    fonts_to_try.extend([
         "arialbd.ttf",
         "arial.ttf",
         "DejaVuSans-Bold.ttf",
         "FreeSansBold.ttf",
         "LiberationSans-Bold.ttf",
         "Roboto-Bold.ttf"
-    ]
+    ])
+
     font = None
     for fp in fonts_to_try:
         try:
@@ -254,6 +284,199 @@ def render_text_on_image(image: np.ndarray, text: str, box: List[float]):
     roi_result = cv2.cvtColor(np.array(roi_pil), cv2.COLOR_RGB2BGR)
     image[y1:y2, x1:x2] = roi_result
 
+def render_text_in_polygon(image: np.ndarray, text: str, poly: np.ndarray, line_spacing_ratio: float = 0.15):
+    """
+    Renders wrapped, auto-sized text centered vertically and horizontally within a polygon.
+    Uses horizontal slicing (scanlines) of the polygon to dynamically determine line widths.
+    """
+    h_img, w_img = image.shape[:2]
+    px, py, pw, ph = cv2.boundingRect(poly)
+
+    # Clip coordinates to be safe
+    x1, y1 = max(0, px), max(0, py)
+    x2, y2 = min(w_img, px + pw), min(h_img, py + ph)
+    pw, ph = x2 - x1, y2 - y1
+    if pw <= 0 or ph <= 0:
+        return
+
+    # Draw local binary mask of the polygon
+    local_mask = np.zeros((ph, pw), dtype=np.uint8)
+    local_poly = poly - [x1, y1]
+    cv2.fillPoly(local_mask, [local_poly], 255)
+
+    # Padding inside the polygon bounds to prevent text from touching boundaries
+    pad_x = max(4, int(pw * 0.10))
+    pad_y = max(4, int(ph * 0.10))
+    H_active = ph - 2 * pad_y
+
+    min_fs = 6
+    max_fs = min(60, H_active)
+    if max_fs < min_fs:
+        max_fs = min_fs + 4
+
+    best_font_size = min_fs
+    best_lines = []
+    best_line_h = min_fs + 2
+    best_line_y_positions = []
+    best_line_spans = []  # Tuples of (x_start, x_end) relative to local crop
+
+    _measure_img = Image.new("RGB", (max(pw, 1), max(ph, 1)))
+    draw_measure = ImageDraw.Draw(_measure_img)
+
+    for fs in range(int(max_fs), min_fs - 1, -1):
+        font = get_cached_font(fs)
+        try:
+            bbox = draw_measure.textbbox((0, 0), "Ay", font=font)
+            line_h = (bbox[3] - bbox[1]) + max(4, fs // 3)
+        except Exception:
+            line_h = fs + max(4, fs // 3)
+
+        total_step = line_h
+
+        words = text.split()
+        if not words:
+            break
+
+        # --- PHẦN FIX LỖI: Ước lượng chiều cao khối text để bắt đầu từ giữa bong bóng ---
+        # 1. Tìm chiều rộng của đa giác tại đường cắt ngang chính giữa (bụng bong bóng)
+        mid_y = ph // 2
+        if 0 <= mid_y < ph:
+            mask_row_mid = local_mask[mid_y, :]
+            matching_cols_mid = np.where(mask_row_mid == 255)[0]
+            if len(matching_cols_mid) > 0:
+                center_w = (matching_cols_mid[-1] - matching_cols_mid[0]) - 2 * pad_x
+            else:
+                center_w = pw - 2 * pad_x
+        else:
+            center_w = pw - 2 * pad_x
+
+        # 2. Làm một vòng lặp nháp (dummy wrap) để đếm xem font này tốn mấy dòng
+        safe_w = max(10, center_w * 0.9) # Trừ hao 10% cho an toàn
+        dummy_lines = 1
+        current_line = ""
+        for word in words:
+            test_line = f"{current_line} {word}".strip()
+            try:
+                bbox = draw_measure.textbbox((0, 0), test_line, font=font)
+                tw = bbox[2] - bbox[0]
+            except Exception:
+                tw = len(test_line) * fs * 0.6
+
+            if tw <= safe_w:
+                current_line = test_line
+            else:
+                if current_line:
+                    dummy_lines += 1
+                current_line = word
+
+        est_total_h = dummy_lines * total_step
+
+        # 3. Tính toán vị trí Y bắt đầu dựa trên tổng chiều cao ước tính.
+        # Thay vì luôn bắt đầu ở pad_y (đỉnh bong bóng), ta đưa nó vào giữa.
+        start_y = (ph - est_total_h) // 2
+        start_y = max(pad_y, start_y)
+        # --- KẾT THÚC PHẦN FIX LỖI ---
+
+        lines = []
+        line_y_positions = []
+        line_spans = []
+
+        current_y = start_y # Áp dụng toạ độ bắt đầu mới
+        word_idx = 0
+        fits = True
+
+        while word_idx < len(words):
+            y_mid = current_y + line_h // 2
+            if current_y + line_h > ph - pad_y:
+                fits = False
+                break
+
+            row_idx = int(y_mid)
+            if row_idx < 0 or row_idx >= ph:
+                fits = False
+                break
+
+            mask_row = local_mask[row_idx, :]
+            matching_cols = np.where(mask_row == 255)[0]
+
+            if len(matching_cols) == 0:
+                fits = False
+                break
+
+            x_start = matching_cols[0]
+            x_end = matching_cols[-1]
+            avail_w = (x_end - x_start) - 2 * pad_x
+
+            if avail_w <= 0:
+                fits = False
+                break
+
+            line_words = []
+            while word_idx < len(words):
+                next_word = words[word_idx]
+                test_line = " ".join(line_words + [next_word]).strip()
+                try:
+                    bbox = draw_measure.textbbox((0, 0), test_line, font=font)
+                    tw = bbox[2] - bbox[0]
+                except Exception:
+                    tw = len(test_line) * fs * 0.6
+
+                if tw <= avail_w:
+                    line_words.append(next_word)
+                    word_idx += 1
+                else:
+                    if len(line_words) == 0:
+                        fits = False
+                    break
+
+            if not fits:
+                break
+
+            lines.append(" ".join(line_words))
+            line_y_positions.append(current_y)
+            line_spans.append((x_start, x_end))
+            current_y += total_step
+
+        if fits and word_idx == len(words):
+            best_font_size = fs
+            best_lines = lines
+            best_line_h = line_h
+            best_line_y_positions = line_y_positions
+            best_line_spans = line_spans
+            break
+
+    # Final rendering
+    font = get_cached_font(best_font_size)
+    roi_bgr = image[y1:y2, x1:x2].copy()
+    roi_pil = Image.fromarray(cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB))
+    draw_local = ImageDraw.Draw(roi_pil)
+
+    # Centering vertically based on the actively calculated lines
+    total_text_h = len(best_lines) * best_line_h if len(best_lines) > 0 else 0
+    # y_offset đã được tính toán phần lớn nhờ start_y, nhưng căn chỉnh vi chỉnh lại lần cuối
+    y_offset = (H_active - total_text_h) // 2
+
+    # Tính độ lệch giữa vị trí nháp và vị trí căn giữa thực tế
+    actual_start_y = best_line_y_positions[0] if best_line_y_positions else pad_y
+    correction_y = (pad_y + y_offset) - actual_start_y
+
+    for i, line in enumerate(best_lines):
+        try:
+            bbox = draw_local.textbbox((0, 0), line, font=font)
+            tw = bbox[2] - bbox[0]
+        except Exception:
+            tw = len(line) * best_font_size * 0.6
+
+        x_start, x_end = best_line_spans[i]
+        avail_w = x_end - x_start
+        line_x = x_start + (avail_w - tw) // 2
+        line_y = best_line_y_positions[i] + correction_y # Apply correction
+
+        draw_local.text((line_x, line_y), line, fill="black", font=font)
+
+    roi_result = cv2.cvtColor(np.array(roi_pil), cv2.COLOR_RGB2BGR)
+    image[y1:y2, x1:x2] = roi_result
+
 
 def align_text_to_speech_bubbles(
     detections: List[Dict[str, Any]],
@@ -304,7 +527,7 @@ def align_text_to_speech_bubbles(
         if text_area <= 0:
             continue
 
-        best_iou = 0
+        best_score = 0
         best_p_idx = -1
 
         for p_idx, poly in enumerate(polygons):
@@ -327,12 +550,12 @@ def align_text_to_speech_bubbles(
             cv2.fillPoly(p_mask, [shifted_poly], 1)
 
             intersection = np.logical_and(t_mask, p_mask).sum()
-            union = np.logical_or(t_mask, p_mask).sum()
+            text_box_area = t_mask.sum()
 
-            iou = intersection / union if union > 0 else 0
+            containment = intersection / text_box_area if text_box_area > 0 else 0
 
-            if iou >= 0.3 and iou > best_iou:
-                best_iou = iou
+            if containment >= 0.5 and containment > best_score:
+                best_score = containment
                 best_p_idx = p_idx
 
         if best_p_idx != -1:

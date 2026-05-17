@@ -16,10 +16,13 @@ from src.utils import (
     download_weights,
     box_in_mask,
     render_text_on_image,
+    render_text_in_polygon,
     align_text_to_speech_bubbles,
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -35,7 +38,7 @@ class MangaTranslatorPipeline:
         use_translation: bool = True,
         source_lang: str = "auto",
         target_lang: str = "English",
-        device: str = "cuda"
+        device: str = "cuda",
     ):
         self.model_dir = model_dir
         self.use_segmentation = use_segmentation
@@ -72,7 +75,9 @@ class MangaTranslatorPipeline:
                 sb_det_path = os.path.join(self.model_dir, "speech_bubble_detector.pt")
                 self.sb_detector = SpeechBubbleDetector_YOLO(sb_det_path)
             sb_seg_path = os.path.join(self.model_dir, "mbnet_speech_bubble_seg.pth")
-            self.sb_segmenter = SpeechBubbleSegmentorMbnet(sb_seg_path, device=self.device)
+            self.sb_segmenter = SpeechBubbleSegmentorMbnet(
+                sb_seg_path, device=self.device
+            )
 
         if self.use_inpainting:
             inp_path = os.path.join(self.model_dir, "anime-manga-big-lama.pt")
@@ -84,7 +89,9 @@ class MangaTranslatorPipeline:
         except Exception as e:
             logger.warning(f"Failed to initialize GeminiOCR: {e}")
 
-    def _create_overlay(self, image: np.ndarray, mask: np.ndarray, color=(0, 0, 255), alpha=0.5) -> np.ndarray:
+    def _create_overlay(
+        self, image: np.ndarray, mask: np.ndarray, color=(0, 0, 255), alpha=0.5
+    ) -> np.ndarray:
         overlay = image.copy()
         overlay[mask > 0] = color
         return cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0)
@@ -133,7 +140,12 @@ class MangaTranslatorPipeline:
                 sb_mask = np.zeros((h, w), dtype=np.uint8)
                 for det in sb_detections:
                     bx1, by1, bx2, by2 = map(int, det["box"])
-                    bx1, by1, bx2, by2 = max(0, bx1), max(0, by1), min(w, bx2), min(h, by2)
+                    bx1, by1, bx2, by2 = (
+                        max(0, bx1),
+                        max(0, by1),
+                        min(w, bx2),
+                        min(h, by2),
+                    )
                     sb_roi = img_bgr[by1:by2, bx1:bx2]
                     if sb_roi.size == 0:
                         continue
@@ -141,21 +153,27 @@ class MangaTranslatorPipeline:
                     roi_sb_mask = self.sb_segmenter.segment(sb_roi)
 
                     # Only take the largest connected component for this speech bubble mask
-                    contours, _ = cv2.findContours(roi_sb_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    contours, _ = cv2.findContours(
+                        roi_sb_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
                     if contours:
                         largest_cnt = max(contours, key=cv2.contourArea)
                         filtered_mask = np.zeros_like(roi_sb_mask)
                         cv2.drawContours(filtered_mask, [largest_cnt], -1, 255, -1)
                         roi_sb_mask = filtered_mask
 
-                    sb_mask[by1:by2, bx1:bx2] = cv2.bitwise_or(sb_mask[by1:by2, bx1:bx2], roi_sb_mask)
+                    sb_mask[by1:by2, bx1:bx2] = cv2.bitwise_or(
+                        sb_mask[by1:by2, bx1:bx2], roi_sb_mask
+                    )
             else:
                 assert self.sb_segmenter is not None, "SB segmenter not initialized"
                 sb_mask = self.sb_segmenter.segment(img_bgr)
 
             sb_overlay = self._create_overlay(img_bgr, sb_mask, color=(255, 0, 0))
             cv2.imwrite(os.path.join(dirs["sb_seg"], f"sb_mask_{filename}"), sb_mask)
-            cv2.imwrite(os.path.join(dirs["sb_seg"], f"sb_overlay_{filename}"), sb_overlay)
+            cv2.imwrite(
+                os.path.join(dirs["sb_seg"], f"sb_overlay_{filename}"), sb_overlay
+            )
 
         # 3. Align text to speech bubbles and filter
         expanded_boxes_viz = {}
@@ -169,7 +187,9 @@ class MangaTranslatorPipeline:
             detections, polygons, poly_to_texts, text_to_poly, expanded_boxes_viz = (
                 align_text_to_speech_bubbles(detections, sb_mask, img_bgr.shape)
             )
-            logger.info(f"Speech bubble alignment & filter: {before} -> {len(detections)} regions")
+            logger.info(
+                f"Speech bubble alignment & filter: {before} -> {len(detections)} regions"
+            )
 
         # 4. Processing & ROI Collection
         logger.info("Step 3: Processing text regions...")
@@ -212,7 +232,9 @@ class MangaTranslatorPipeline:
                         inpaint_failures += 1
 
         if inpaint_failures > 0:
-            logger.warning(f"Inpainting failed for {inpaint_failures}/{len(detections)} ROIs")
+            logger.warning(
+                f"Inpainting failed for {inpaint_failures}/{len(detections)} ROIs"
+            )
 
         # 5. Save intermediate results
         det_viz = img_bgr.copy()
@@ -259,11 +281,13 @@ class MangaTranslatorPipeline:
         # 7. Translation
         translated_texts = {}
         if self.use_translation and self.ocr_engine and final_transcriptions:
-            logger.info(f"Step 6: Translating {len(final_transcriptions)} texts ({self.source_lang} -> {self.target_lang})...")
+            logger.info(
+                f"Step 6: Translating {len(final_transcriptions)} texts ({self.source_lang} -> {self.target_lang})..."
+            )
             translated_texts = self.ocr_engine.translate(
                 final_transcriptions,
                 source_lang=self.source_lang,
-                target_lang=self.target_lang
+                target_lang=self.target_lang,
             )
             logger.info(f"Translated {len(translated_texts)} texts.")
 
@@ -272,7 +296,9 @@ class MangaTranslatorPipeline:
                 for idx in sorted(translated_texts):
                     orig = final_transcriptions.get(idx, "")
                     trans = translated_texts.get(idx, "")
-                    f.write(f"TEXT_{idx}:\n  Original: {orig}\n  Translated: {trans}\n\n")
+                    f.write(
+                        f"TEXT_{idx}:\n  Original: {orig}\n  Translated: {trans}\n\n"
+                    )
             logger.info(f"Translation saved to: {trans_path}")
 
         # 8. Text rendering on inpainted image
@@ -280,9 +306,19 @@ class MangaTranslatorPipeline:
             logger.info("Step 7: Rendering translated text onto image...")
             for idx, text in translated_texts.items():
                 if idx < len(ocr_boxes):
-                    # Use refined bbox from expansion if available, otherwise fallback to original box
-                    render_box = expanded_boxes_viz.get(idx, ocr_boxes[idx])
-                    render_text_on_image(inpainted_res, text, render_box)
+                    # Check if this text box is the ONLY text box inside its paired speech bubble
+                    is_single_text_in_bubble = False
+                    if idx in text_to_poly:
+                        p_idx = text_to_poly[idx]
+                        if len(poly_to_texts.get(p_idx, [])) == 1:
+                            is_single_text_in_bubble = True
+
+                    if is_single_text_in_bubble:
+                        poly = polygons[p_idx]
+                        render_text_in_polygon(inpainted_res, text, poly)
+                    else:
+                        render_box = expanded_boxes_viz.get(idx, ocr_boxes[idx])
+                        render_text_on_image(inpainted_res, text, render_box)
             rendered_path = os.path.join(dirs["translated"], f"rendered_{filename}")
             cv2.imwrite(rendered_path, inpainted_res)
             logger.info(f"Rendered image saved to: {rendered_path}")
@@ -291,25 +327,43 @@ class MangaTranslatorPipeline:
             render_base = img_bgr.copy()
             for idx, text in translated_texts.items():
                 if idx < len(ocr_boxes):
-                    # Use refined bbox from expansion if available, otherwise fallback to original box
-                    render_box = expanded_boxes_viz.get(idx, ocr_boxes[idx])
-                    render_text_on_image(render_base, text, render_box)
+                    # Check if this text box is the ONLY text box inside its paired speech bubble
+                    is_single_text_in_bubble = False
+                    if idx in text_to_poly:
+                        p_idx = text_to_poly[idx]
+                        if len(poly_to_texts.get(p_idx, [])) == 1:
+                            is_single_text_in_bubble = True
+
+                    if is_single_text_in_bubble:
+                        poly = polygons[p_idx]
+                        render_text_in_polygon(render_base, text, poly)
+                    else:
+                        render_box = expanded_boxes_viz.get(idx, ocr_boxes[idx])
+                        render_text_on_image(render_base, text, render_box)
             rendered_path = os.path.join(dirs["translated"], f"rendered_{filename}")
             cv2.imwrite(rendered_path, render_base)
             logger.info(f"Rendered image saved to: {rendered_path}")
 
         # 9. Create and save polygon alignment visualization on top of final translated/rendered image
         if sb_mask is not None and polygons:
-            logger.info("Creating polygon alignment visualization on the final translated image...")
+            logger.info(
+                "Creating polygon alignment visualization on the final translated image..."
+            )
 
             # Utilize the specific version where the translated text has already been applied
             if translated_texts:
                 if self.use_inpainting:
                     poly_viz = inpainted_res.copy()
                 else:
-                    poly_viz = render_base.copy() if 'render_base' in locals() else img_bgr.copy()
+                    poly_viz = (
+                        render_base.copy()
+                        if "render_base" in locals()
+                        else img_bgr.copy()
+                    )
             else:
-                poly_viz = inpainted_res.copy() if self.use_inpainting else img_bgr.copy()
+                poly_viz = (
+                    inpainted_res.copy() if self.use_inpainting else img_bgr.copy()
+                )
 
             # 1. Visualize the polygons themselves
             for p_idx, poly in enumerate(polygons):
@@ -327,7 +381,9 @@ class MangaTranslatorPipeline:
             # 2. Visualize the original text bounding boxes vs the newly expanded bounding boxes
             for t_idx, det_box in enumerate(original_boxes):
                 tx1, ty1, tx2, ty2 = map(int, det_box)
-                cv2.rectangle(poly_viz, (tx1, ty1), (tx2, ty2), (0, 0, 255), 2) # Original Text Box = Red
+                cv2.rectangle(
+                    poly_viz, (tx1, ty1), (tx2, ty2), (0, 0, 255), 2
+                )  # Original Text Box = Red
 
                 if t_idx in text_to_poly:
                     p_idx = text_to_poly[t_idx]
@@ -341,7 +397,13 @@ class MangaTranslatorPipeline:
                         # Draw a yellow connector line from original center to expanded center
                         cx_orig, cy_orig = (tx1 + tx2) // 2, (ty1 + ty2) // 2
                         cx_new, cy_new = (ex1 + ex2) // 2, (ey1 + ey2) // 2
-                        cv2.line(poly_viz, (cx_orig, cy_orig), (cx_new, cy_new), (0, 255, 255), 1)
+                        cv2.line(
+                            poly_viz,
+                            (cx_orig, cy_orig),
+                            (cx_new, cy_new),
+                            (0, 255, 255),
+                            1,
+                        )
                     else:
                         # Draw bounding rect of discarded edge case for reference = Orange
                         px, py, pw, ph = cv2.boundingRect(poly)
@@ -363,8 +425,7 @@ class MangaTranslatorPipeline:
 
     def process_directory(self, input_dir: str, output_dir: str = "output_dev"):
         extensions = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-        images = [f for f in os.listdir(input_dir)
-                  if f.lower().endswith(extensions)]
+        images = [f for f in os.listdir(input_dir) if f.lower().endswith(extensions)]
         if not images:
             logger.warning(f"No images found in {input_dir}")
             return
@@ -384,20 +445,49 @@ class MangaTranslatorPipeline:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Manga Translator Pipeline")
     parser.add_argument("--image", type=str, default=None, help="Path to input image")
-    parser.add_argument("--input-dir", type=str, default=None, help="Directory of images to process")
-    parser.add_argument("--output", type=str, default="output_dev", help="Output directory")
-    parser.add_argument("--models", type=str, default="checkpoints", help="Model directory")
-    parser.add_argument("--no-seg", action="store_true", help="Disable text segmentation")
-    parser.add_argument("--no-sb-det", action="store_true", help="Disable speech bubble detection")
-    parser.add_argument("--no-sb-seg", action="store_true", help="Disable speech bubble segmentation")
+    parser.add_argument(
+        "--input-dir", type=str, default=None, help="Directory of images to process"
+    )
+    parser.add_argument(
+        "--output", type=str, default="output_dev", help="Output directory"
+    )
+    parser.add_argument(
+        "--models", type=str, default="checkpoints", help="Model directory"
+    )
+    parser.add_argument(
+        "--no-seg", action="store_true", help="Disable text segmentation"
+    )
+    parser.add_argument(
+        "--no-sb-det", action="store_true", help="Disable speech bubble detection"
+    )
+    parser.add_argument(
+        "--no-sb-seg", action="store_true", help="Disable speech bubble segmentation"
+    )
     parser.add_argument("--no-inp", action="store_true", help="Disable inpainting")
-    parser.add_argument("--no-ocr", action="store_true", help="Disable OCR transcription")
-    parser.add_argument("--no-translate", action="store_true", help="Disable translation")
-    parser.add_argument("--source-lang", type=str, default="auto", help="Source language for translation")
-    parser.add_argument("--target-lang", type=str, default="English", help="Target language for translation")
-    parser.add_argument("--device", type=str, default="cuda", help="Device (cuda or cpu)")
+    parser.add_argument(
+        "--no-ocr", action="store_true", help="Disable OCR transcription"
+    )
+    parser.add_argument(
+        "--no-translate", action="store_true", help="Disable translation"
+    )
+    parser.add_argument(
+        "--source-lang",
+        type=str,
+        default="auto",
+        help="Source language for translation",
+    )
+    parser.add_argument(
+        "--target-lang",
+        type=str,
+        default="English",
+        help="Target language for translation",
+    )
+    parser.add_argument(
+        "--device", type=str, default="cuda", help="Device (cuda or cpu)"
+    )
 
     args = parser.parse_args()
 
@@ -424,7 +514,7 @@ def main():
 
 
 if __name__ == "__main__":
-    TEST_IMAGE = "sample/image_0277_idx285_webp.jpg"
+    TEST_IMAGE = "sample/2.png"
     if os.path.exists(TEST_IMAGE):
         pipeline = MangaTranslatorPipeline(
             use_segmentation=True,
@@ -432,6 +522,6 @@ if __name__ == "__main__":
             use_inpainting=True,
             use_ocr=True,
             use_translation=True,
-            target_lang="Vietnamese"
+            target_lang="Vietnamese",
         )
         pipeline.process_image(TEST_IMAGE)
