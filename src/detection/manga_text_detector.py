@@ -4,44 +4,18 @@ from ultralytics import YOLO
 from typing import List, Dict, Any
 from src.detection.detector import BaseDetector
 import os
-import requests
-from tqdm import tqdm
 from src.configs.config import ModelWeightsConfig
+from src.utils import download_weights
 
 
 class TextDetector_YOLO(BaseDetector):
     def __init__(self, model_path: str, conf_threshold: float = 0.3):
         self.model_path = model_path
         self.conf_threshold = conf_threshold
-        self.model = None
+        self.model: YOLO | None = None
         if not os.path.exists(model_path):
-            self._download_weights(ModelWeightsConfig.TEXT_DETECTION_URL, model_path)
+            download_weights(ModelWeightsConfig.TEXT_DETECTION_URL, model_path)
         self.load_model(model_path)
-
-    def _download_weights(self, url: str, save_path: str):
-        print(f"Downloading model weights from {url}...")
-
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        response = requests.get(url, stream=True)
-        total_size = int(response.headers.get("content-length", 0))
-
-        # Use tqdm for a progress bar
-        with (
-            open(save_path, "wb") as file,
-            tqdm(
-                desc=os.path.basename(save_path),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar,
-        ):
-            for data in response.iter_content(chunk_size=1024):
-                size = file.write(data)
-                bar.update(size)
-        print(f"Download complete: {save_path}")
 
     def load_model(self, model_path: str):
         """Load YOLO model (Detection or Segmentation)."""
@@ -53,6 +27,7 @@ class TextDetector_YOLO(BaseDetector):
         Perform inference on the input image.
         Returns: A list of dictionaries containing box, label, confidence, and mask (if applicable).
         """
+        assert self.model is not None, "Text detector model not loaded"
         results = self.model(source=image, conf=self.conf_threshold, verbose=False)
 
         detections = []
@@ -84,13 +59,41 @@ class TextDetector_YOLO(BaseDetector):
 # Quick Test
 if __name__ == "__main__":
     # Path to your trained or downloaded YOLO model
-    # Example: "yolov8n-manga.pt"
     detector = TextDetector_YOLO("checkpoints/text_det_yolo.onnx")
-    img = cv2.imread("0a02c2ef_ac972d304509.jpeg")
+
+    # Example test image path
+    img_path = "sample/image_0277_idx285_webp.jpg"
+    img = cv2.imread(img_path)
 
     if img is not None:
         results = detector.detect(img)
+
+        # Make a copy of the image for visualization
+        vis_img = img.copy()
+
         for res in results:
-            print(f"Found {res['label']} [{res['id']}] at {res['box']}")
+            print(f"Found {res['label']} [{res['id']}] at {res['box']} with conf {res['conf']:.2f}")
+
+            # Extract box coordinates and convert to integers
+            x1, y1, x2, y2 = map(int, res['box'])
+
+            # Draw the bounding box (Green)
+            cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Create a label string with the confidence score
+            label_text = f"{res['label']} {res['conf']:.2f}"
+
+            # Draw a filled rectangle above the box for the text background
+            (w, h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(vis_img, (x1, y1 - 20), (x1 + w, y1), (0, 255, 0), -1)
+
+            # Put the text label (Black text)
+            cv2.putText(vis_img, label_text, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+        # Save the visualized result
+        output_path = "text_detection_result.jpg"
+        cv2.imwrite(output_path, vis_img)
+        print(f"✅ Visualization saved to {output_path}")
+
     else:
-        print("❌ Error: Could not load image. Check the file path.")
+        print(f"❌ Error: Could not load image. Check the file path: {img_path}")

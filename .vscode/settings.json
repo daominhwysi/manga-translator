@@ -1,0 +1,13 @@
+{
+  "python.defaultInterpreterPath": ".pixi/envs/default/python.exe",
+  "python.analysis.venvPath": ".pixi/envs",
+  "python.terminal.activateEnvInCurrentTerminal": true,
+  "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticMode": "workspace",
+  "python.languageServer": "Pylance",
+  "python.envFile": "${workspaceFolder}/.env",
+  "python.experiments.optOutFrom": ["pythonDiscoveryModule"],
+  "python-envs.defaultEnvManager": "ms-python.python:system"
+}

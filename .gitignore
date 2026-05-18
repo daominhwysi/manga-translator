@@ -4,3 +4,12 @@ venv/
 *.pt
 *.pth
 checkpoints/
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# Development outputs & debug results
+output_dev/
+text_detection_result.jpg
+result.png
+sb_result.png

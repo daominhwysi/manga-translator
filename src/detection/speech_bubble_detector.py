@@ -4,44 +4,18 @@ from ultralytics import YOLO
 from typing import List, Dict, Any
 from src.detection.detector import BaseDetector
 import os
-import requests
-from tqdm import tqdm
 from src.configs.config import ModelWeightsConfig
+from src.utils import download_weights
 
 
 class SpeechBubbleDetector_YOLO(BaseDetector):
     def __init__(self, model_path: str, conf_threshold: float = 0.3):
         self.model_path = model_path
         self.conf_threshold = conf_threshold
-        self.model = None
+        self.model: YOLO | None = None
         if not os.path.exists(model_path):
-            self._download_weights(ModelWeightsConfig.SPEECH_BUBBLE_DETECTION_URL, model_path)
+            download_weights(ModelWeightsConfig.SPEECH_BUBBLE_DETECTION_URL, model_path)
         self.load_model(model_path)
-
-    def _download_weights(self, url: str, save_path: str):
-        print(f"Downloading model weights from {url}...")
-
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        response = requests.get(url, stream=True)
-        total_size = int(response.headers.get("content-length", 0))
-
-        # Use tqdm for a progress bar
-        with (
-            open(save_path, "wb") as file,
-            tqdm(
-                desc=os.path.basename(save_path),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar,
-        ):
-            for data in response.iter_content(chunk_size=1024):
-                size = file.write(data)
-                bar.update(size)
-        print(f"Download complete: {save_path}")
 
     def load_model(self, model_path: str):
         """Load YOLO model (Detection or Segmentation)."""
@@ -53,6 +27,8 @@ class SpeechBubbleDetector_YOLO(BaseDetector):
         Perform inference on the input image.
         Returns: A list of dictionaries containing box, label, confidence, and mask (if applicable).
         """
+        if self.model is None:
+            raise RuntimeError("Speech bubble detector model not loaded")
         results = self.model(source=image, conf=self.conf_threshold, verbose=False)
 
         detections = []

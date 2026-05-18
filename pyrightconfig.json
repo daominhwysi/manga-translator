@@ -1,0 +1,10 @@
+{
+    "venvPath": ".pixi/envs",
+    "venv": "default",
+    "extraPaths": [
+        "src"
+    ],
+    "typeCheckingMode": "basic",
+    "reportMissingImports": true,
+    "reportMissingModuleSource": false
+}
